@@ -22,6 +22,8 @@ package main
 import (
 	"net/http"
 	"github.com/aurieli333/goapimon"
+	"github.com/aurieli333/goapimon/dashboard"
+	"github.com/aurieli333/goapimon/prometheus"
 )
 
 func main() {
@@ -33,10 +35,10 @@ func main() {
 	})
 
 	// Enable dashboard at /__goapimon (optional)
-	goapimon.EnableDashboard()
+	dashboard.Enable()
 
 	// Export metrics for Prometheus (optional)
-	goapimon.EnablePrometheus("/metrics")
+	prometheus.Enable("/metrics")
  
     http.Handle("/__goapimon", goapimon.DashboardHandler)
 	http.Handle("/metrics", goapimon.PrometheusHandler)
