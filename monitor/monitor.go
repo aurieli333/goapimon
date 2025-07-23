@@ -1,11 +1,25 @@
 package monitor
 
 import (
-	"goapimon/config"
 	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/aurieli333/goapimon/config"
+	"github.com/aurieli333/goapimon/model"
 )
+
+type Monitor struct {
+	Stats map[string]map[string]*model.RouteStats
+	Mu    *config.SafeMutex
+}
+
+func NewMonitor(stats map[string]map[string]*model.RouteStats) *Monitor {
+	return &Monitor{
+		Stats: stats,
+		Mu:    &config.SafeMutex{},
+	}
+}
 
 // statusRecorder wraps http.ResponseWriter to capture status code
 type statusRecorder struct {
@@ -32,7 +46,7 @@ func normalizePath(path string) string {
 	return path
 }
 
-func Monitor(next http.Handler) http.Handler {
+func (m *Monitor) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isInternalPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
@@ -42,15 +56,18 @@ func Monitor(next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(sr, r)
 		elapsed := time.Since(start)
-		config.Mu.Lock()
-		methodStats, ok := config.Stats[r.Method]
+
+		m.Mu.Lock()
+		defer m.Mu.Unlock()
+
+		methodStats, ok := m.Stats[r.Method]
 		if !ok {
-			methodStats = make(map[string]*config.RouteStats)
-			config.Stats[r.Method] = methodStats
+			methodStats = make(map[string]*model.RouteStats)
+			m.Stats[r.Method] = methodStats
 		}
 		rs, ok := methodStats[normalizePath(r.URL.Path)]
 		if !ok {
-			rs = &config.RouteStats{
+			rs = &model.RouteStats{
 				TotalStatus: make(map[int]int),
 				TotalMin:    elapsed,
 				TotalMax:    elapsed,
@@ -58,7 +75,7 @@ func Monitor(next http.Handler) http.Handler {
 			}
 			methodStats[normalizePath(r.URL.Path)] = rs
 		}
-		rec := config.RequestRecord{Timestamp: start, Duration: elapsed, Status: sr.status}
+		rec := model.RequestRecord{Timestamp: start, Duration: elapsed, Status: sr.status}
 		rs.Recent = append(rs.Recent, rec)
 		// Prune old records (>5min)
 		cutoff := time.Now().Add(-5 * time.Minute)
@@ -86,6 +103,5 @@ func Monitor(next http.Handler) http.Handler {
 		if r.URL.Query().Get("fail") == "1" || sr.status >= 400 {
 			rs.TotalErrorCount++
 		}
-		config.Mu.Unlock()
 	})
 }

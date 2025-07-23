@@ -20,10 +20,9 @@ go get github.com/aurieli333/goapimon
 package main
 
 import (
+	"goapimon"
+	"log"
 	"net/http"
-	"github.com/aurieli333/goapimon"
-	"github.com/aurieli333/goapimon/dashboard"
-	"github.com/aurieli333/goapimon/prometheus"
 )
 
 func main() {
@@ -34,19 +33,24 @@ func main() {
 		w.Write([]byte("Hello!"))
 	})
 
-	// Enable dashboard at /__goapimon (optional)
-	dashboard.Enable()
+	// Turn on Dashboard (optional)
+	goapimon.DashboardEnable()
 
-	// Export metrics for Prometheus (optional)
-	prometheus.Enable("/metrics")
- 
-    http.Handle("/__goapimon", goapimon.DashboardHandler)
-	http.Handle("/metrics", goapimon.PrometheusHandler)
+	// Turn on Prometheus with path (optional)
+	goapimon.PrometheusEnable("/metrics")
 
-	// Wrap your handler with the monitoring middleware
-	logged := goapimon.Monitor(mux)
+	// Creating handlers
+	mux.HandleFunc("/__goapimon/", goapimon.DashboardHandler)
+	mux.HandleFunc("/metrics", goapimon.PrometheusHandler)
 
-	http.ListenAndServe(":8080", logged)
+	// Wrapping your mux in monitoring(middleware)
+	logged := goapimon.Monitor.Middleware(mux)
+
+	log.Println("Starting server on :8080")
+	err := http.ListenAndServe(":8080", logged)
+	if err != nil {
+		log.Fatalf("Server failed: %v", err)
+	}
 }
 ```
 

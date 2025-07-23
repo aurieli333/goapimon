@@ -2,58 +2,170 @@ package prometheus
 
 import (
 	"fmt"
-	"goapimon/config"
-	"goapimon/utility"
+	"io"
 	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/aurieli333/goapimon/model"
+	"github.com/aurieli333/goapimon/utility"
 )
 
-func Enable(path string) {
-	config.PrometheusEnabled = true
-	config.PrometheusPath = path
+type Prometheus struct {
+	Mu      *sync.Mutex
+	Windows []model.Window
+	Stats   map[string]map[string]*model.RouteStats
+
+	Enabled bool
+	Path    string
 }
 
-var Handler http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) {
-	if !config.PrometheusEnabled {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("Prometheus metrics disabled"))
-		return
+func NewPrometheus(mu *sync.Mutex, windows []model.Window, stats map[string]map[string]*model.RouteStats) *Prometheus {
+	return &Prometheus{
+		Mu:      mu,
+		Windows: windows,
+		Stats:   stats,
+		Enabled: false,
 	}
-	config.Mu.Lock()
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	for method, paths := range config.Stats {
-		for path, s := range paths {
-			for _, win := range config.Windows {
-				count, errCount, status, avg, min, max, thru := utility.CalcWindowStats(s.Recent, win.Length)
-				for code, cnt := range status {
-					w.Write([]byte(fmt.Sprintf("goapimon_status_total{window=\"%s\",method=\"%s\",path=\"%s\",code=\"%d\"} %d\n", win.Name, method, path, code, cnt)))
+}
+
+func (p *Prometheus) Enable(path string) {
+	p.Enabled = true
+	p.Path = path
+}
+
+func (p *Prometheus) Handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !p.Enabled {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+
+		p.Mu.Lock()
+		stats := deepCopyStats(p.Stats)
+		windows := append([]model.Window(nil), p.Windows...)
+		p.Mu.Unlock()
+
+		for method, paths := range stats {
+			for path, s := range paths {
+				for _, win := range windows {
+					count, errCount, statusMap, avg, min, max, rps := utility.CalcWindowStats(s.Recent, win.Length, time.Now())
+
+					for code, cnt := range statusMap {
+						writeMetric(w, "goapimon_http_status_total", map[string]string{
+							"window": win.Name, "method": method, "path": path, "code": strconv.Itoa(code),
+						}, cnt)
+					}
+
+					writeMetric(w, "goapimon_requests_total", map[string]string{
+						"window": win.Name, "method": method, "path": path,
+					}, count)
+
+					writeMetric(w, "goapimon_errors_total", map[string]string{
+						"window": win.Name, "method": method, "path": path,
+					}, errCount)
+
+					writeMetric(w, "goapimon_avg_ms", map[string]string{
+						"window": win.Name, "method": method, "path": path,
+					}, fmt.Sprintf("%.1f", avg))
+
+					writeMetric(w, "goapimon_min_ms", map[string]string{
+						"window": win.Name, "method": method, "path": path,
+					}, fmt.Sprintf("%.1f", min))
+
+					writeMetric(w, "goapimon_max_ms", map[string]string{
+						"window": win.Name, "method": method, "path": path,
+					}, fmt.Sprintf("%.1f", max))
+
+					writeMetric(w, "goapimon_throughput_rps", map[string]string{
+						"window": win.Name, "method": method, "path": path,
+					}, fmt.Sprintf("%.2f", rps))
 				}
-				w.Write([]byte(fmt.Sprintf("goapimon_requests_total{window=\"%s\",method=\"%s\",path=\"%s\"} %d\n", win.Name, method, path, count)))
-				w.Write([]byte(fmt.Sprintf("goapimon_errors_total{window=\"%s\",method=\"%s\",path=\"%s\"} %d\n", win.Name, method, path, errCount)))
-				w.Write([]byte(fmt.Sprintf("goapimon_avg_ms{window=\"%s\",method=\"%s\",path=\"%s\"} %.1f\n", win.Name, method, path, avg)))
-				w.Write([]byte(fmt.Sprintf("goapimon_min_ms{window=\"%s\",method=\"%s\",path=\"%s\"} %.1f\n", win.Name, method, path, min)))
-				w.Write([]byte(fmt.Sprintf("goapimon_max_ms{window=\"%s\",method=\"%s\",path=\"%s\"} %.1f\n", win.Name, method, path, max)))
-				w.Write([]byte(fmt.Sprintf("goapimon_throughput_rps{window=\"%s\",method=\"%s\",path=\"%s\"} %.2f\n", win.Name, method, path, thru)))
+
+				// Total window (lifetime stats)
+				for code, cnt := range s.TotalStatus {
+					writeMetric(w, "goapimon_http_status_total", map[string]string{
+						"window": "total", "method": method, "path": path, "code": strconv.Itoa(code),
+					}, cnt)
+				}
+
+				writeMetric(w, "goapimon_requests_total", map[string]string{
+					"window": "total", "method": method, "path": path,
+				}, s.TotalCount)
+
+				writeMetric(w, "goapimon_errors_total", map[string]string{
+					"window": "total", "method": method, "path": path,
+				}, s.TotalErrorCount)
+
+				avgTotal := float64(0)
+				if s.TotalCount > 0 {
+					avgTotal = float64(s.TotalTime.Milliseconds()) / float64(s.TotalCount)
+				}
+
+				writeMetric(w, "goapimon_avg_ms", map[string]string{
+					"window": "total", "method": method, "path": path,
+				}, fmt.Sprintf("%.1f", avgTotal))
+
+				writeMetric(w, "goapimon_min_ms", map[string]string{
+					"window": "total", "method": method, "path": path,
+				}, fmt.Sprintf("%.1f", float64(s.TotalMin.Milliseconds())))
+
+				writeMetric(w, "goapimon_max_ms", map[string]string{
+					"window": "total", "method": method, "path": path,
+				}, fmt.Sprintf("%.1f", float64(s.TotalMax.Milliseconds())))
+
+				rps := float64(0)
+				duration := s.LastSeen.Sub(s.FirstSeen).Seconds()
+				if duration > 0 {
+					rps = float64(s.TotalCount) / duration
+				}
+
+				writeMetric(w, "goapimon_throughput_rps", map[string]string{
+					"window": "total", "method": method, "path": path,
+				}, fmt.Sprintf("%.2f", rps))
 			}
-			// Total (all time)
-			for code, cnt := range s.TotalStatus {
-				w.Write([]byte(fmt.Sprintf("goapimon_status_total{window=\"total\",method=\"%s\",path=\"%s\",code=\"%d\"} %d\n", method, path, code, cnt)))
-			}
-			avg := float64(0)
-			if s.TotalCount > 0 {
-				avg = float64(s.TotalTime.Milliseconds()) / float64(s.TotalCount)
-			}
-			thru := float64(0)
-			dur := s.LastSeen.Sub(s.FirstSeen).Seconds()
-			if dur > 0 {
-				thru = float64(s.TotalCount) / dur
-			}
-			w.Write([]byte(fmt.Sprintf("goapimon_requests_total{window=\"total\",method=\"%s\",path=\"%s\"} %d\n", method, path, s.TotalCount)))
-			w.Write([]byte(fmt.Sprintf("goapimon_errors_total{window=\"total\",method=\"%s\",path=\"%s\"} %d\n", method, path, s.TotalErrorCount)))
-			w.Write([]byte(fmt.Sprintf("goapimon_avg_ms{window=\"total\",method=\"%s\",path=\"%s\"} %.1f\n", method, path, avg)))
-			w.Write([]byte(fmt.Sprintf("goapimon_min_ms{window=\"total\",method=\"%s\",path=\"%s\"} %.1f\n", method, path, float64(s.TotalMin.Milliseconds()))))
-			w.Write([]byte(fmt.Sprintf("goapimon_max_ms{window=\"total\",method=\"%s\",path=\"%s\"} %.1f\n", method, path, float64(s.TotalMax.Milliseconds()))))
-			w.Write([]byte(fmt.Sprintf("goapimon_throughput_rps{window=\"total\",method=\"%s\",path=\"%s\"} %.2f\n", method, path, thru)))
 		}
 	}
-	config.Mu.Unlock()
+}
+
+// Helper to format labels for Prometheus
+func formatLabels(labels map[string]string) string {
+	var b strings.Builder
+	b.WriteString("{")
+	first := true
+	for k, v := range labels {
+		if !first {
+			b.WriteString(",")
+		}
+		b.WriteString(fmt.Sprintf("%s=\"%s\"", k, v))
+		first = false
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+// Writes a single Prometheus metric
+func writeMetric(w io.Writer, name string, labels map[string]string, value interface{}) {
+	fmt.Fprintf(w, "%s%s %v\n", name, formatLabels(labels), value)
+}
+
+// Deep copy stats to safely unlock before writing response
+func deepCopyStats(src map[string]map[string]*model.RouteStats) map[string]map[string]*model.RouteStats {
+	statsCopy := make(map[string]map[string]*model.RouteStats)
+	for method, pathStats := range src {
+		statsCopy[method] = make(map[string]*model.RouteStats)
+		for path, stat := range pathStats {
+			newStat := *stat
+			newRecent := make([]model.RequestRecord, len(stat.Recent))
+			copy(newRecent, stat.Recent)
+			newStat.Recent = newRecent
+			statsCopy[method][path] = &newStat
+		}
+	}
+	return statsCopy
 }

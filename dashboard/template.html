@@ -297,6 +297,7 @@
     <button onclick='refresh()'>Refresh</button>
     <label style='display:flex;align-items:center;gap:0.3em;cursor:pointer;font-size:0.97em;'><input type='checkbox' id='autorefreshbox' style='accent-color:var(--accent);margin:0;'> Auto-refresh</label>
     <span style='color:#888;font-size:0.95em;' id='autorefresh'></span>
+    <button onclick='downloadCSV()'>Download csv</button>
   </div>
 
   <div id='tableWrap'></div>
@@ -369,6 +370,10 @@
     function refresh() {
       localStorage.setItem('goapimon-tab', current);
       location.reload();
+    }
+
+    function downloadCSV() {
+      window.open('/__goapimon/export/csv', '_blank')
     }
 
     function autoRefresh() {

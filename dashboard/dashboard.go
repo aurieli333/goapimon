@@ -1,49 +1,97 @@
 package dashboard
 
 import (
+	"bytes"
+	"embed"
+	"encoding/csv"
 	"encoding/json"
-	"goapimon/config"
-	"goapimon/utility"
 	"html/template"
 	"net/http"
-	"path/filepath"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/aurieli333/goapimon/model"
+	"github.com/aurieli333/goapimon/utility"
 )
 
-type DashboardData struct {
-	Name  string
-	Value int
+//go:embed template.html
+var tmplFS embed.FS
+
+type Row struct {
+	Method     string
+	Path       string
+	Count      int
+	ErrorCount int
+	Status     map[int]int
+	Avg        float64
+	Min        float64
+	Max        float64
+	Throughput float64
+	HasError   bool
 }
 
-func Enable() {
-	config.DashboardEnabled = true
+type Dashboard struct {
+	Mu      *sync.Mutex
+	Windows []model.Window
+	Stats   map[string]map[string]*model.RouteStats
+	Enabled bool
 }
 
-var Handler http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) {
-	if !config.DashboardEnabled {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("Dashboard disabled"))
-		return
+func NewDashboard(mu *sync.Mutex, windows []model.Window, stats map[string]map[string]*model.RouteStats) *Dashboard {
+	return &Dashboard{
+		Mu:      mu,
+		Windows: windows,
+		Stats:   stats,
+		Enabled: false,
 	}
-	config.Mu.Lock()
-	// Prepare data for JS rendering
-	type Row struct {
-		Method     string
-		Path       string
-		Count      int
-		ErrorCount int
-		Status     map[int]int
-		Avg        float64
-		Min        float64
-		Max        float64
-		Throughput float64
-		HasError   bool
+}
+
+func (d *Dashboard) Enable() {
+	d.Enabled = true
+}
+
+func (d *Dashboard) exportCsv(w http.ResponseWriter, r *http.Request) {
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
+
+	b := &bytes.Buffer{}
+	writer := csv.NewWriter(b)
+	writer.Write([]string{"window", "URL", "Method", "status", "count", "avg", "throughput"})
+
+	data := d.calcData()
+
+	for window, rows := range data {
+		for _, row := range rows {
+			count := strconv.Itoa(row.Count)
+			avg := strconv.FormatFloat(row.Avg, 'f', 2, 64)
+			tp := strconv.FormatFloat(row.Throughput, 'f', 2, 64)
+			var status string
+			for tStatus := range row.Status {
+				status = strconv.Itoa(tStatus)
+				break
+			}
+
+			writer.Write([]string{window, row.Path, row.Method, status, count, avg, tp})
+		}
 	}
-	data := map[string][]Row{}
-	for _, win := range config.Windows {
+
+	writer.Flush()
+
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename=monitors.csv")
+	w.WriteHeader(http.StatusOK)
+
+	w.Write(b.Bytes())
+}
+
+func (d *Dashboard) calcData() map[string][]Row {
+	data := make(map[string][]Row)
+	for _, win := range d.Windows {
 		rows := []Row{}
-		for method, paths := range config.Stats {
+		for method, paths := range d.Stats {
 			for path, s := range paths {
-				count, errCount, status, avg, min, max, rps := utility.CalcWindowStats(s.Recent, win.Length)
+				count, errCount, status, avg, min, max, rps := utility.CalcWindowStats(s.Recent, win.Length, time.Now())
 				if count == 0 {
 					continue
 				}
@@ -64,9 +112,10 @@ var Handler http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) {
 		}
 		data[win.Name] = rows
 	}
-	// Total (all time) - use all-time stats, not calcWindowStats
+
+	// Total stats (all-time)
 	rows := []Row{}
-	for method, paths := range config.Stats {
+	for method, paths := range d.Stats {
 		for path, s := range paths {
 			status := s.TotalStatus
 			avg := float64(0)
@@ -93,28 +142,45 @@ var Handler http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data["total"] = rows
-	config.Mu.Unlock()
+	return data
+}
 
-	// Marshal to JSON
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		http.Error(w, "Failed to encode data", http.StatusInternalServerError)
-		return
-	}
+func (d *Dashboard) Handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 
-	// Prepare template data
-	tmplData := struct {
-		Data template.JS // Use template.JS to avoid escaping
-	}{
-		Data: template.JS(jsonData),
-	}
+		if !d.Enabled {
+			http.NotFound(w, r)
+			return
+		}
 
-	// Parse and execute template
-	tmplPath := filepath.Join("goapimon", "dashboard", "template.html")
-	tmpl, err := template.ParseFiles(tmplPath)
-	if err != nil {
-		http.Error(w, "Template error", http.StatusInternalServerError)
-		return
+		if r.URL.Path == "/__goapimon/export/csv" {
+			// Serve CSV export
+			d.exportCsv(w, r)
+			return
+		}
+
+		// Serve the main dashboard HTML
+		d.Mu.Lock()
+		defer d.Mu.Unlock()
+
+		data := d.calcData()
+		jsonData, err := json.Marshal(data)
+		if err != nil {
+			http.Error(w, "Failed to encode data", http.StatusInternalServerError)
+			return
+		}
+
+		tmplData := struct {
+			Data template.JS
+		}{
+			Data: template.JS(jsonData),
+		}
+
+		tmpl, err := template.ParseFS(tmplFS, "template.html")
+		if err != nil {
+			http.Error(w, "Template error", http.StatusInternalServerError)
+			return
+		}
+		tmpl.Execute(w, tmplData)
 	}
-	tmpl.Execute(w, tmplData)
 }
