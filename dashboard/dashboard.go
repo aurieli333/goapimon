@@ -6,8 +6,10 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +19,9 @@ import (
 
 //go:embed template.html
 var tmplFS embed.FS
+
+//go:embed static/*
+var embeddedFiles embed.FS
 
 type Row struct {
 	Method     string
@@ -123,8 +128,8 @@ func (d *Dashboard) calcData() map[string][]Row {
 				avg = float64(s.TotalTime.Milliseconds()) / float64(s.TotalCount)
 			}
 			var rps float64 = -1
-			if s.TotalCount > 1 && s.LastSeen.After(s.FirstSeen) {
-				rps = float64(s.TotalCount) / s.LastSeen.Sub(s.FirstSeen).Seconds()
+			if s.TotalCount > 1 && time.Now().After(s.FirstSeen) {
+				rps = float64(s.TotalCount) / time.Now().Sub(s.FirstSeen).Seconds()
 			}
 			hasErr := s.TotalErrorCount > 0
 			rows = append(rows, Row{
@@ -146,6 +151,9 @@ func (d *Dashboard) calcData() map[string][]Row {
 }
 
 func (d *Dashboard) Handler() http.HandlerFunc {
+	staticFS, _ := fs.Sub(embeddedFiles, "static")
+	fileServer := http.StripPrefix("/__goapimon/static/", http.FileServer(http.FS(staticFS)))
+
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		if !d.Enabled {
@@ -159,16 +167,20 @@ func (d *Dashboard) Handler() http.HandlerFunc {
 			return
 		}
 
+		if strings.HasPrefix(r.URL.Path, "/__goapimon/static/") {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+
 		// Serve the main dashboard HTML
 		d.Mu.Lock()
-		defer d.Mu.Unlock()
-
 		data := d.calcData()
 		jsonData, err := json.Marshal(data)
 		if err != nil {
 			http.Error(w, "Failed to encode data", http.StatusInternalServerError)
 			return
 		}
+		d.Mu.Unlock()
 
 		tmplData := struct {
 			Data template.JS
@@ -181,6 +193,9 @@ func (d *Dashboard) Handler() http.HandlerFunc {
 			http.Error(w, "Template error", http.StatusInternalServerError)
 			return
 		}
-		tmpl.Execute(w, tmplData)
+		if err := tmpl.Execute(w, tmplData); err != nil {
+			http.Error(w, "Render error", http.StatusInternalServerError)
+			return
+		}
 	}
 }

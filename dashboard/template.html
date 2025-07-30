@@ -3,13 +3,14 @@
 <head>
   <meta charset='UTF-8'>
   <title>goapimon Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
       --bg: #f8f9fa;
       --fg: #222;
       --header-bg: #fff;
       --header-fg: #222;
-      --accent: #007bff;
+      --accent: #1f777e;
       --tab-bg: #f1f3f6;
       --tab-active: #fff;
       --error-bg: #ffeaea;
@@ -28,7 +29,7 @@
       --fg: #e4e6e7;
       --header-bg: #23272a;
       --header-fg: #e4e6e7;
-      --accent: #4ea1ff;
+      --accent: #fff;
       --tab-bg: #23272a;
       --tab-active: #181a1b;
       --error-bg: #3a2323;
@@ -279,28 +280,63 @@
         gap: 0.7em;
       }
     }
-  </style>
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.2em;
+      padding: 1em;
+    }
 
+    .chart-card {
+      background: var(--table-bg);
+      border: 1px solid var(--border);
+      border-radius: 0.5em;
+      padding: 1em;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+    }
+  </style>
+ 
 </head>
 <body>
 
   <div id='header'>
-    <h1><span class='logo'>goapimon</span> <span class='subtitle'>API Monitor</span></h1>
-    <button id='theme-toggle' onclick='toggleTheme()'>🌙 Dark</button>
+    <h1>
+    <img id="logo-img" src="/__goapimon/static/goapimon_green.png" alt="goapimon logo" style="height: 1.8em;">
+      <span class='subtitle'>API Monitor</span>
+    </h1>
+    <button id='theme-toggle' onclick='toggleTheme()'>Dark</button>
   </div>
 
   <div id='tabs'></div>
 
   <div id='filters'>
+    <label>View: 
+      <select id="viewSelector" onchange="toggleView()">
+        <option value="table">Table</option>
+        <option value="charts">Charts</option>
+      </select>
+    </label>
     <label>Path: <input id='pathFilter' placeholder='Filter by path'></label>
     <label>Method: <select id='methodFilter'><option value=''>All</option></select></label>
     <button onclick='refresh()'>Refresh</button>
-    <label style='display:flex;align-items:center;gap:0.3em;cursor:pointer;font-size:0.97em;'><input type='checkbox' id='autorefreshbox' style='accent-color:var(--accent);margin:0;'> Auto-refresh</label>
+    <label style='display:flex;align-items:center;gap:0.3em;cursor:pointer;font-size:0.97em;'>
+      <input type='checkbox' id='autorefreshbox' style='accent-color:var(--accent);margin:0;'> Auto-refresh
+    </label>
     <span style='color:#888;font-size:0.95em;' id='autorefresh'></span>
     <button onclick='downloadCSV()'>Download csv</button>
   </div>
 
+
   <div id='tableWrap'></div>
+
+  <div id="chartsWrap" style="display:none;">
+    <div class="dashboard-grid">
+      <div class="chart-card"><canvas id="rpsChart" height="120"></canvas></div>
+      <div class="chart-card"><canvas id="errorChart" height="120"></canvas></div>
+      <div class="chart-card"><canvas id="statusPieChart" height="120"></canvas></div>
+      <div class="chart-card"><canvas id="latencyChart" height="120"></canvas></div>
+    </div>
+  </div>
 
   <script>
 
@@ -317,6 +353,32 @@
         return '<button class="tab' + (w===current ? ' active' : '') + '" onclick="switchTab(\'' + w + '\')">' + w + '</button>';
       }).join('');
     }
+
+    function updateLogo() {
+      const isDark = document.body.classList.contains('dark');
+      const logo = document.getElementById('logo-img');
+      logo.src = isDark ? '/__goapimon/static/goapimon_white.png' : '/__goapimon/static/goapimon_green.png';
+    }
+
+
+    function toggleView() {
+      const view = document.getElementById('viewSelector').value;
+      localStorage.setItem('goapimon-view', view); // ← Save selection
+      const tableWrap = document.getElementById('tableWrap');
+      const chartsWrap = document.getElementById('chartsWrap');
+      if (view === 'table') {
+        tableWrap.style.display = '';
+        chartsWrap.style.display = 'none';
+      } else {
+        tableWrap.style.display = 'none';
+        chartsWrap.style.display = '';
+        renderChart();
+        renderErrorChart();
+        renderStatusPieChart();
+        renderLatencyChart();
+      }
+    }
+
 
     function statusBadges(status) {
       let html = '<span class="status-badges">';
@@ -350,12 +412,222 @@
       }
       html += '</tbody></table>';
       document.getElementById('tableWrap').innerHTML = html;
+      renderChart();
+      renderErrorChart();
+      renderStatusPieChart();
+      renderLatencyChart();
       // Fill method filter
       const sel = document.getElementById('methodFilter');
       const prev = sel.value;
       sel.innerHTML = '<option value="">All</option>' + Array.from(methods).sort().map(function(m){return '<option value="'+m+'">'+m+'</option>';}).join('');
       sel.value = prev;
     }
+
+    function renderChart() {
+      const ctx = document.getElementById('rpsChart').getContext('2d');
+      const rows = parsed[current] || [];
+
+      const pathVal = document.getElementById('pathFilter').value.toLowerCase();
+      const methodVal = document.getElementById('methodFilter').value;
+
+      const filtered = rows.filter(row => {
+        if (pathVal && !row.Path.toLowerCase().includes(pathVal)) return false;
+        if (methodVal && row.Method !== methodVal) return false;
+        return true;
+      });
+
+      const labels = filtered.map(r => r.Path);
+      const data = filtered.map(r => r.Throughput === -1 ? 0 : r.Throughput);
+
+      if (window.rpsChartInstance) {
+        window.rpsChartInstance.destroy();
+      }
+
+      window.rpsChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Requests Per Second',
+            data: data,
+            backgroundColor: 'rgba(0, 123, 255, 0.6)',
+            borderColor: 'rgba(0, 123, 255, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(ctx) {
+                  return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { autoSkip: false } },
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: 'RPS' }
+            }
+          }
+        }
+      });
+    }
+
+    function renderErrorChart() {
+      const ctx = document.getElementById('errorChart').getContext('2d');
+      const rows = parsed[current] || [];
+      const filtered = rows.filter(row => {
+        const pathVal = document.getElementById('pathFilter').value.toLowerCase();
+        const methodVal = document.getElementById('methodFilter').value;
+        if (pathVal && !row.Path.toLowerCase().includes(pathVal)) return false;
+        if (methodVal && row.Method !== methodVal) return false;
+        return true;
+      });
+
+      const labels = filtered.map(r => r.Path);
+      const data = filtered.map(r => r.ErrorCount);
+
+      if (window.errorChartInstance) window.errorChartInstance.destroy();
+
+      window.errorChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Error Count',
+            data,
+            backgroundColor: 'rgba(255, 99, 132, 0.6)',
+            borderColor: 'rgba(255, 99, 132, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: 'Errors' }
+            }
+          }
+        }
+      });
+    }
+
+    function renderStatusPieChart() {
+      const ctx = document.getElementById('statusPieChart').getContext('2d');
+      const rows = parsed[current] || [];
+      const statusTotals = {};
+
+      rows.forEach(row => {
+        const pathVal = document.getElementById('pathFilter').value.toLowerCase();
+        const methodVal = document.getElementById('methodFilter').value;
+        if (pathVal && !row.Path.toLowerCase().includes(pathVal)) return;
+        if (methodVal && row.Method !== methodVal) return;
+        Object.entries(row.Status).forEach(([code, count]) => {
+          statusTotals[code] = (statusTotals[code] || 0) + count;
+        });
+      });
+
+      const codes = Object.keys(statusTotals).sort();
+      const counts = codes.map(c => statusTotals[c]);
+
+      if (window.statusPieChartInstance) window.statusPieChartInstance.destroy();
+
+      window.statusPieChartInstance = new Chart(ctx, {
+        type: 'pie',
+        data: {
+          labels: codes,
+          datasets: [{
+            label: 'Status Codes',
+            data: counts,
+            backgroundColor: codes.map(c => {
+              if (c.startsWith('2')) return '#2ecc40';
+              if (c.startsWith('3')) return '#3498db';
+              if (c.startsWith('4')) return '#f1c40f';
+              if (c.startsWith('5')) return '#e74c3c';
+              return '#888';
+            })
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { position: 'bottom' },
+            tooltip: {
+              callbacks: {
+                label: ctx => `${ctx.label}: ${ctx.parsed} responses`
+              }
+            }
+          }
+        }
+      });
+    }
+
+    function renderLatencyChart() {
+      const ctx = document.getElementById('latencyChart').getContext('2d');
+      const rows = parsed[current] || [];
+      const filtered = rows.filter(row => {
+        const pathVal = document.getElementById('pathFilter').value.toLowerCase();
+        const methodVal = document.getElementById('methodFilter').value;
+        if (pathVal && !row.Path.toLowerCase().includes(pathVal)) return false;
+        if (methodVal && row.Method !== methodVal) return false;
+        return true;
+      });
+
+      const labels = filtered.map(r => r.Path);
+      const avg = filtered.map(r => r.Avg.toFixed(2));
+      const min = filtered.map(r => r.Min === -1 ? 0 : r.Min.toFixed(2));
+      const max = filtered.map(r => r.Max === -1 ? 0 : r.Max.toFixed(2));
+
+      if (window.latencyChartInstance) window.latencyChartInstance.destroy();
+
+      window.latencyChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Avg ms',
+              data: avg,
+              borderColor: '#007bff',
+              backgroundColor: 'rgba(0, 123, 255, 0.2)',
+              tension: 0.4
+            },
+            {
+              label: 'Min ms',
+              data: min,
+              borderColor: '#28a745',
+              backgroundColor: 'rgba(40, 167, 69, 0.2)',
+              tension: 0.4
+            },
+            {
+              label: 'Max ms',
+              data: max,
+              borderColor: '#dc3545',
+              backgroundColor: 'rgba(220, 53, 69, 0.2)',
+              tension: 0.4
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { position: 'bottom' } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: 'Milliseconds' }
+            }
+          }
+        }
+      });
+    }
+
 
     function switchTab(w) {
       current = w;
@@ -382,7 +654,7 @@
         document.getElementById('autorefresh').textContent = '';
         return;
       }
-      let left = 5;
+      let left = 30;
       document.getElementById('autorefresh').textContent = 'Auto-refresh in ' + left + 's';
       timer = setInterval(function(){
         left--;
@@ -405,20 +677,27 @@
       const body = document.body;
       const btn = document.getElementById('theme-toggle');
       const dark = body.classList.toggle('dark');
-      btn.textContent = dark ? '☀️ Light' : '🌙 Dark';
+      btn.textContent = dark ? 'Light' : 'Dark';
       localStorage.setItem('goapimon-theme', dark ? 'dark' : '');
+      updateLogo();
     }
 
     (function(){
       if(localStorage.getItem('goapimon-theme')==='dark') {
         document.body.classList.add('dark');
-        document.getElementById('theme-toggle').textContent = '☀️ Light';
+        document.getElementById('theme-toggle').textContent = 'Light';
+        updateLogo();
       }
     })();
 
     renderTabs();
     renderTable();
     autoRefresh();
+
+
+    const savedView = localStorage.getItem('goapimon-view') || 'table';
+    document.getElementById('viewSelector').value = savedView;
+    toggleView();
 
   </script>
 
