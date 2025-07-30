@@ -1,0 +1,3 @@
+# Ignore all HTML files
+*.html linguist-detectable=false
+dashboard/static/* linguist-detectable=false
