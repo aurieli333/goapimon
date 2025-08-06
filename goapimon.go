@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aurieli333/goapimon/adapters"
 	"github.com/aurieli333/goapimon/model"
 	"github.com/aurieli333/goapimon/monitor"
 	"github.com/aurieli333/goapimon/prometheus"
@@ -49,3 +50,5 @@ func DashboardEnable() {
 func PrometheusEnable(path string) {
 	Prometheus.Enable(path)
 }
+
+var GinMiddleware = adapters.Middleware

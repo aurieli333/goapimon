@@ -3,6 +3,7 @@ package monitor
 import (
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/aurieli333/goapimon/config"
@@ -48,7 +49,7 @@ func normalizePath(path string) string {
 
 func (m *Monitor) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isInternalPath(r.URL.Path) {
+		if isInternalPath(strings.Split(r.URL.Path, `/`)[1]) || isInternalPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -28,6 +28,8 @@ var Windows = []struct {
 
 var InternalPaths = map[string]bool{
 	"/__goapimon/": true,
+	"__goapimon":   true,
 	"/__goapimon":  true,
 	"/metrics":     true,
+	"metrics":      true,
 }

@@ -1,6 +1,6 @@
-# goapimon — Simple API Monitoring for Go (net/http)
+# goapimon — Simple API Monitoring for Go (net/http, gin)
 
-📈 **goapimon** is a lightweight, plug-and-play middleware for Go `net/http` servers.  
+📈 **goapimon** is a lightweight, plug-and-play middleware for Go `net/http`, `gin` servers.  
 It monitors API requests, collects real-time metrics, and provides a local dashboard.  
 Perfect for solo developers, hobby projects, and self-hosted apps.
 
@@ -16,6 +16,7 @@ go get github.com/aurieli333/goapimon
 
 ## 🧪 Basic Usage
 
+### net/http
 ```go
 package main
 
@@ -54,6 +55,41 @@ func main() {
 }
 ```
 
+### Gin Web Framework
+```
+package main
+
+import (
+	"github.com/aurieli333/goapimon"
+
+	"github.com/gin-gonic/gin"
+)
+
+func main() {
+	r := gin.Default()
+
+	// Turn on Dashboard (optional)
+	goapimon.DashboardEnable()
+
+	// Turn on Prometheus with path (optional)
+	goapimon.PrometheusEnable("/metrics")
+
+	// Use goapimon middleware for gin
+	r.Use(goapimon.GinMiddleware(goapimon.Monitor))
+
+	// Your API endpoint
+	r.GET("/hello", func(c *gin.Context) {
+		c.String(200, "Hello!")
+	})
+
+	// Creating handlers
+	r.Any("/__goapimon/*any", gin.WrapF(goapimon.DashboardHandler))
+	r.GET("/metrics", gin.WrapF(goapimon.PrometheusHandler))
+
+	r.Run(":8080")
+}
+```
+
 ---
 
 ## 🔎 What It Monitors
@@ -75,15 +111,6 @@ _You can disable or protect this route in production._
 
 ---
 
-## ⚙️ Configuration
-
-Configure with environment variables or code:
-- `GOAPIMON_LOG_FILE=logs.txt` (write logs to file)
-- `GOAPIMON_ENABLE_DASHBOARD=false` (disable UI)
-- `GOAPIMON_METRICS_PATH=/custommetrics` (custom exporter path)
-
----
-
 ## 💰 goapimon Pro (Coming Soon)
 
 Upgrade to **goapimon Pro** for:
@@ -102,6 +129,7 @@ Upgrade to **goapimon Pro** for:
 - [ ] In-memory metrics
 - [ ] Prometheus exporter
 - [ ] Local HTML dashboard
+- [ ] Support frameworks
 - [ ] Alerts & export (Pro)
 - [ ] Auth + theming (Pro)
 - [ ] Public hosted mode
@@ -123,7 +151,7 @@ MIT — free for commercial and personal use.
 ## 🌐 Links
 
 - Website / Demo: _(coming soon)_
-- Telegram updates: _(coming soon)_
+- Telegram updates: https://t.me/goapimon
 - Buy Pro: _(coming soon)_
 
 ---
