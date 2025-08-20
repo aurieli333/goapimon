@@ -1,10 +1,11 @@
-package main
+ackage main
 
 import (
-	"log"
-	"net/http"
-
 	"github.com/aurieli333/goapimon"
+	"log"
+	"math/rand"
+	"net/http"
+	"time"
 )
 
 func main() {
@@ -12,21 +13,23 @@ func main() {
 
 	// Your API endpoint
 	mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+		rand.Seed(time.Now().UnixNano())
+		randomDuration := time.Duration(rand.Float64() * float64(time.Second))
+		time.Sleep(randomDuration)
 		w.Write([]byte("Hello!"))
 	})
 
 	// Turn on Dashboard (optional)
 	goapimon.DashboardEnable()
 
-	// Turn on Prometheus with path (optional)
+	// Turn on Prometheus with metrics path (optional)
 	goapimon.PrometheusEnable("/metrics")
 
-	// Creating handlers
+	// Add handlers
 	mux.HandleFunc("/__goapimon/", goapimon.DashboardHandler)
 	mux.HandleFunc("/metrics", goapimon.PrometheusHandler)
 
-	// Wrapping your mux in monitoring(middleware)
-	logged := goapimon.Monitor.Middleware(mux)
+	logged := goapimon.MiddlewareNetHTTP(goapimon.Monitor, mux)
 
 	log.Println("Starting server on :8080")
 	err := http.ListenAndServe(":8080", logged)

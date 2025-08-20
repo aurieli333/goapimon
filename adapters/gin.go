@@ -1,17 +1,30 @@
 package adapters
 
 import (
-	"net/http"
+	"strings"
+	"time"
 
 	"github.com/aurieli333/goapimon/monitor"
+	"github.com/aurieli333/goapimon/utility"
 
 	"github.com/gin-gonic/gin"
 )
 
-// Adapter for connecting goapimon.Middleware to Gin
-func Middleware(m *monitor.Monitor) gin.HandlerFunc {
-	// Wrap in http.Handler, and then in gin.HandlerFunc
-	h := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	}))
-	return gin.WrapH(h)
+// MiddlewareGin — adapter for Gin
+func MiddlewareGin(m *monitor.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if utility.IsInternalPath(strings.Split(c.Request.URL.Path, `/`)[1]) || utility.IsInternalPath(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
+
+		start := time.Now()
+		c.Next()
+		elapsed := time.Since(start)
+
+		method := c.Request.Method
+		path := utility.NormalizePath(c.FullPath()) // FullPath for routes with params
+		status := c.Writer.Status()
+		m.CoreMiddleware(method, path, status, start, elapsed)
+	}
 }

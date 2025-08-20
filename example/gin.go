@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/aurieli333/goapimon"
+	"github.com/aurieli333/goapimon-deploy"
 
 	"github.com/gin-gonic/gin"
 )

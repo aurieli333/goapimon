@@ -5,11 +5,10 @@ import (
 	"time"
 
 	"github.com/aurieli333/goapimon/adapters"
+	"github.com/aurieli333/goapimon/dashboard"
 	"github.com/aurieli333/goapimon/model"
 	"github.com/aurieli333/goapimon/monitor"
 	"github.com/aurieli333/goapimon/prometheus"
-
-	"github.com/aurieli333/goapimon/dashboard"
 )
 
 // Global mutex shared across all statistics consumers
@@ -51,4 +50,5 @@ func PrometheusEnable(path string) {
 	Prometheus.Enable(path)
 }
 
-var GinMiddleware = adapters.Middleware
+var MiddlewareGin = adapters.MiddlewareGin
+var MiddlewareNetHTTP = adapters.MiddlewareNetHTTP

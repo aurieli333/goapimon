@@ -332,6 +332,8 @@
   <div id="chartsWrap" style="display:none;">
     <div class="dashboard-grid">
       <div class="chart-card"><canvas id="rpsChart" height="120"></canvas></div>
+      <div class="chart-card"><canvas id="p95Chart" height="120"></canvas></div>
+      <div class="chart-card"><canvas id="p99Chart" height="120"></canvas></div>
       <div class="chart-card"><canvas id="errorChart" height="120"></canvas></div>
       <div class="chart-card"><canvas id="statusPieChart" height="120"></canvas></div>
       <div class="chart-card"><canvas id="latencyChart" height="120"></canvas></div>
@@ -373,6 +375,8 @@
         tableWrap.style.display = 'none';
         chartsWrap.style.display = '';
         renderChart();
+        renderChartP95();
+        renderChartP99();
         renderErrorChart();
         renderStatusPieChart();
         renderLatencyChart();
@@ -402,13 +406,13 @@
       const pathVal = document.getElementById('pathFilter').value.toLowerCase();
       const methodVal = document.getElementById('methodFilter').value;
       const methods = new Set();
-      let html = '<table><thead><tr><th>Method</th><th>Path</th><th>Count</th><th>Error</th><th>Status</th><th>Avg ms</th><th>Min ms</th><th>Max ms</th><th>RPS</th></tr></thead><tbody>';
+      let html = '<table><thead><tr><th>Method</th><th>Path</th><th>Count</th><th>Error count</th><th>Error rate %</th><th>Status</th><th>Avg ms</th><th>Min ms</th><th>Max ms</th><th>RPS</th><th>p50 ms</th><th>p90 ms</th><th>p95 ms</th><th>p99 ms</th></tr></thead><tbody>';
       for (let i=0; i<rows.length; ++i) {
         const row = rows[i];
         methods.add(row.Method);
         if (pathVal && row.Path.toLowerCase().indexOf(pathVal) === -1) continue;
         if (methodVal && row.Method !== methodVal) continue;
-        html += '<tr' + (row.HasError ? ' class="error"' : '') + '><td>' + row.Method + '</td><td>' + row.Path + '</td><td>' + row.Count + '</td><td>' + row.ErrorCount + '</td><td class="status">' + statusBadges(row.Status) + '</td><td>' + row.Avg.toFixed(2) + '</td><td>' + (row.Min === -1 ? 'N/A' : row.Min.toFixed(2)) + '</td><td>' + (row.Max === -1 ? 'N/A' : row.Max.toFixed(2)) + '</td><td>' + (row.Throughput === -1 ? 'N/A' : row.Throughput.toFixed(2)) + '</td></tr>';
+        html += '<tr' + (row.HasError ? ' class="error"' : '') + '><td>' + row.Method + '</td><td>' + row.Path + '</td><td>' + row.Count + '</td><td>' + row.ErrorCount + '</td><td>' + row.ErrorRate + '</td><td class="status">' + statusBadges(row.Status) + '</td><td>' + row.Avg.toFixed(2) + '</td><td>' + (row.Min === -1 ? 'N/A' : row.Min.toFixed(2)) + '</td><td>' + (row.Max === -1 ? 'N/A' : row.Max.toFixed(2)) + '</td><td>' + (row.Throughput === -1 ? 'N/A' : row.Throughput.toFixed(2)) + '</td><td>' + row.P50.toFixed(2) + '</td><td>' + row.P50.toFixed(2) + '</td><td>' + row.P95.toFixed(2) + '</td><td>' + row.P99.toFixed(2) + '</td></tr>';
       }
       html += '</tbody></table>';
       document.getElementById('tableWrap').innerHTML = html;
@@ -458,7 +462,7 @@
         options: {
           responsive: true,
           plugins: {
-            legend: { display: false },
+            legend: { display: true },
             tooltip: {
               callbacks: {
                 label: function(ctx) {
@@ -472,6 +476,116 @@
             y: {
               beginAtZero: true,
               title: { display: true, text: 'RPS' }
+            }
+          }
+        }
+      });
+    }
+  
+    function renderChartP95() {
+      const ctx = document.getElementById('p95Chart').getContext('2d');
+      const rows = parsed[current] || [];
+
+      const pathVal = document.getElementById('pathFilter').value.toLowerCase();
+      const methodVal = document.getElementById('methodFilter').value;
+
+      const filtered = rows.filter(row => {
+        if (pathVal && !row.Path.toLowerCase().includes(pathVal)) return false;
+        if (methodVal && row.Method !== methodVal) return false;
+        return true;
+      });
+
+      const labels = filtered.map(r => r.Path);
+      const data = filtered.map(r => r.P95 === -1 ? 0 : r.P95);
+
+      if (window.p95ChartInstance) {
+        window.p95ChartInstance.destroy();
+      }
+
+      window.p95ChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'p95',
+            data: data,
+            backgroundColor: 'rgba(0, 123, 255, 0.6)',
+            borderColor: 'rgba(0, 123, 255, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { display: true },
+            tooltip: {
+              callbacks: {
+                label: function(ctx) {
+                  return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { autoSkip: false } },
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: 'ms' }
+            }
+          }
+        }
+      });
+    }
+
+    function renderChartP99() {
+      const ctx = document.getElementById('p99Chart').getContext('2d');
+      const rows = parsed[current] || [];
+
+      const pathVal = document.getElementById('pathFilter').value.toLowerCase();
+      const methodVal = document.getElementById('methodFilter').value;
+
+      const filtered = rows.filter(row => {
+        if (pathVal && !row.Path.toLowerCase().includes(pathVal)) return false;
+        if (methodVal && row.Method !== methodVal) return false;
+        return true;
+      });
+
+      const labels = filtered.map(r => r.Path);
+      const data = filtered.map(r => r.P99 === -1 ? 0 : r.P99);
+
+      if (window.p99ChartInstance) {
+        window.p99ChartInstance.destroy();
+      }
+
+      window.rpsChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'p99',
+            data: data,
+            backgroundColor: 'rgba(0, 123, 255, 0.6)',
+            borderColor: 'rgba(0, 123, 255, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { display: true },
+            tooltip: {
+              callbacks: {
+                label: function(ctx) {
+                  return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { autoSkip: false } },
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: 'ms' }
             }
           }
         }
@@ -508,7 +622,7 @@
         },
         options: {
           responsive: true,
-          plugins: { legend: { display: false } },
+          plugins: { legend: { display: true } },
           scales: {
             y: {
               beginAtZero: true,
