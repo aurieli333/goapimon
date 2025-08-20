@@ -1,11 +1,12 @@
-ackage main
+package main
 
 import (
-	"github.com/aurieli333/goapimon"
 	"log"
 	"math/rand"
 	"net/http"
 	"time"
+
+	"github.com/aurieli333/goapimon"
 )
 
 func main() {
